@@ -1,0 +1,23 @@
+# Entorno virtual y cachés de Python
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+
+# Datos y datasets generados
+data_lake/01_raw/*
+data_lake/02_processed/*
+!data_lake/01_raw/.gitkeep
+!data_lake/02_processed/.gitkeep
+
+# Dependencias y builds de Node/Vite
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.log
+
+# Entornos del sistema y editores
+.vscode/
+.idea/
+.DS_Store
