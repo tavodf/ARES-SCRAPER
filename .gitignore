@@ -1,23 +1,18 @@
-# Entorno virtual y cachés de Python
+# Entorno Virtual
 .venv/
+venv/
 env/
+
+# Caché de Python
 __pycache__/
 *.pyc
-*.pyo
 
-# Datos y datasets generados
-data_lake/01_raw/*
-data_lake/02_processed/*
-!data_lake/01_raw/.gitkeep
-!data_lake/02_processed/.gitkeep
+# Datos y Persistencia de Sesión
+chrome_profile/
+data_lake/
+error_waf.html
 
-# Dependencias y builds de Node/Vite
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-*.log
-
-# Entornos del sistema y editores
-.vscode/
-.idea/
+# Archivos de entorno y configuraciones del sistema operativo
+.env
 .DS_Store
+Thumbs.db

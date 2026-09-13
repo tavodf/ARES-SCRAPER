@@ -62,11 +62,16 @@ class AmazonAdapter(BaseAdapter):
                 clean_price_str = re.sub(r'[^\d.]', '', raw_price)
                 price_value = float(clean_price_str) if clean_price_str else 0.0
 
+                # Extracción de Imagen
+                img_elem = card.select_one('.s-image')
+                image_url = img_elem.get('src', '') if img_elem else ""
+
                 products.append({
                     "id": f"AMZ-{idx:03d}",
                     "title": title,
                     "price": price_value,
                     "url": url,
+                    "image_url": image_url,
                     "category": "amazon_adapter",
                     "timestamp": "Extraído por Ares Scraper"
                 })
