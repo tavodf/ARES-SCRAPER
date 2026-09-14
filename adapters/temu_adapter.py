@@ -4,6 +4,8 @@ from adapters.base_adapter import BaseAdapter
 import re
 
 class TemuAdapter(BaseAdapter):
+    is_dynamic = True
+    
     """Adaptador de extracción para el DOM de Temu."""
     
     def get_headers(self) -> Dict[str, str]:

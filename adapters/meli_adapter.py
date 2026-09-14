@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 from adapters.base_adapter import BaseAdapter
 
 class MercadoLibreAdapter(BaseAdapter):
+    is_dynamic = True
     """
     Adaptador maestro para MercadoLibre Colombia.
     Detecta automáticamente la tipología de la URL:

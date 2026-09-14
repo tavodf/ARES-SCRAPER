@@ -1,17 +1,14 @@
 import requests
 from typing import List, Optional
 from adapters.router import get_adapter
-from adapters.meli_adapter import MercadoLibreAdapter
 from scraper_selenium import obtener_dom_dinamico
-from adapters.temu_adapter import TemuAdapter
 
 def obtener_dom(url: str) -> Optional[str]:
-    """Realiza una petición para la inspección preliminar con enrutamiento híbrido."""
+    """Realiza una petición preliminar respetando la naturaleza dinámica o estática del adaptador."""
     adapter = get_adapter(url)
     
-    # Compuerta Lógica: Motor Dinámico (Selenium) vs Motor Estático (Requests)
-    if isinstance(adapter, (MercadoLibreAdapter, TemuAdapter)):
-        print(f"[SISTEMA] Compuerta lógica activa: Redirigiendo a motor dinámico (Evasión WAF)...")
+    if adapter.is_dynamic:
+        print(f"[SISTEMA] Compuerta activa: Desplegando motor dinámico ({adapter.__class__.__name__})...")
         return obtener_dom_dinamico(url)
         
     headers = adapter.get_headers()
@@ -26,21 +23,17 @@ def obtener_dom(url: str) -> Optional[str]:
         return None
 
 def extraer_multiples_paginas(base_url: str, pages: int = 1) -> List[str]:
-    """Recorre iterativamente las páginas utilizando enrutamiento híbrido."""
+    """Recorre iterativamente las páginas delegando al motor correspondiente."""
     adapter = get_adapter(base_url)
     html_pages = []
 
     print(f"\n[SISTEMA] Iniciando barrido masivo de {pages} página(s) con {adapter.__class__.__name__}...")
 
-    # Evaluación de estado estático vs dinámico para el ciclo iterativo
-    # Evaluación de estado estático vs dinámico para el ciclo iterativo
-    is_dynamic = isinstance(adapter, (MercadoLibreAdapter, TemuAdapter))
-
     for page in range(1, pages + 1):
         target_url = adapter.build_pagination_url(base_url, page)
         print(f"[RED] Consultando Página {page} de {pages} -> {target_url}")
 
-        if is_dynamic:
+        if adapter.is_dynamic:
             dom = obtener_dom_dinamico(target_url)
             if dom:
                 html_pages.append(dom)
