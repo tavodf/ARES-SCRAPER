@@ -53,50 +53,75 @@ class MercadoLibreAdapter(BaseAdapter):
     def _parse_plp(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
         """Parser avanzado para Páginas de Listado, Búsqueda y Clasificados (Vehículos/Retail/Showrooms)."""
         products = []
-        
-        # Selectores ampliados: incluye contenedores estándar, grillas poly y clasificados/showroom
-        cards = soup.select(
-            'li.ui-search-layout__item, '
-            'div.poly-card, '
-            'div.ui-search-result, '
-            'div.andes-card, '
-            'div.ui-result-row, '
-            'li.results-item, '
-            'div[class*="showroom"], '
-            'div[class*="brand-wrapper"], '
-            'div[class*="poly-component"]'
-        )
+        seen_keys = set()
+
+        # Selección jerárquica excluyente para evitar multiplicar 5x el mismo producto por nodos hijos anidados
+        cards = soup.select('li.ui-search-layout__item')
+        if not cards:
+            cards = soup.select('div.ui-search-result, li.results-item, div.ui-result-row')
+        if not cards:
+            cards = soup.select('div.poly-card, div.andes-card')
+        if not cards:
+            cards = soup.select('div[class*="showroom"], div[class*="brand-wrapper"]')
 
         for idx, card in enumerate(cards, 1):
             try:
-                # Título
-                title_elem = card.select_one('.ui-search-item__title, .poly-component__title, h2, a.ui-search-link, div[class*="title"]')
-                title = title_elem.get('title') or title_elem.get_text(strip=True) if title_elem else "Sin título"
+                # 1. Título principal
+                title_elem = card.select_one(
+                    '.poly-component__title, .ui-search-item__title, h2 a, h2, a.ui-search-link, div[class*="title"]'
+                )
+                title = (title_elem.get('title') or title_elem.get_text(strip=True)) if title_elem else "Sin título"
 
-                # Enlace
-                link_elem = card.select_one('a.ui-search-link, a.poly-component__title, a')
-                url = link_elem.get('href', '') if link_elem else ""
+                # Enriquecer con atributos de clasificados/vehículos (Año | Kilometraje | Ubicación) si existen
+                attrs_elems = card.select('.poly-attributes_list__item, .ui-search-card-attributes__attribute')
+                if attrs_elems:
+                    attrs_text = " | ".join(a.get_text(strip=True) for a in attrs_elems if a.get_text(strip=True))
+                    if attrs_text and attrs_text not in title:
+                        title = f"{title} ({attrs_text})"
 
-                # Precio
-                price_elem = card.select_one('.andes-money-amount__fraction, .poly-price__current .andes-money-amount__fraction, .price-tag-fraction, span[class*="fraction"]')
+                # 2. Enlace y Clave Primaria Real (MCO-XXXX)
+                link_elem = card.select_one('a.poly-component__title, a.ui-search-link, h2 a, a[href]')
+                raw_url = link_elem.get('href', '') if link_elem else ""
+                clean_url = raw_url.split('#')[0].strip() if raw_url else ""
+
+                mco_match = re.search(r'(MCO-?\d+)', clean_url or raw_url, re.IGNORECASE)
+                if mco_match:
+                    clean_mco = mco_match.group(1).upper().replace('-', '')
+                    item_id = f"MELI-{clean_mco}"
+                else:
+                    item_id = f"MELI-PLP-{idx:03d}"
+
+                # 3. Precio (aislando el contenedor principal de precio actual, ignorando cuotas o precios tachados)
+                price_elem = (
+                    card.select_one('.poly-price__current .andes-money-amount__fraction')
+                    or card.select_one('.ui-search-price__second-line .andes-money-amount__fraction')
+                    or card.select_one('.andes-money-amount__fraction, .price-tag-fraction, span[class*="fraction"]')
+                )
                 raw_price = price_elem.get_text(strip=True) if price_elem else "0"
-                
                 clean_price_str = re.sub(r'[^\d]', '', raw_price)
                 price_value = float(clean_price_str) if clean_price_str else 0.0
 
-                # Imagen
-                img_elem = card.select_one('.ui-search-result-image__element, .poly-card__portada img, img')
-                image_url = img_elem.get('src') or img_elem.get('data-src', '') if img_elem else ""
+                # 4. Imagen (soportando lazy-loading data-src)
+                img_elem = card.select_one('.poly-card__portada img, .ui-search-result-image__element, img')
+                image_url = (img_elem.get('data-src') or img_elem.get('src', '')) if img_elem else ""
+                if image_url.startswith('data:image') and img_elem and img_elem.get('data-src'):
+                    image_url = img_elem.get('data-src', '')
 
                 # Filtrado de seguridad
                 if title == "Sin título" or price_value == 0.0:
                     continue
 
+                # Clave de unicidad por tarjeta real
+                dedup_key = clean_url if clean_url else f"{item_id}|{title}|{price_value}"
+                if dedup_key in seen_keys:
+                    continue
+                seen_keys.add(dedup_key)
+
                 products.append({
-                    "id": f"MELI-PLP-{idx:03d}",
+                    "id": item_id,
                     "title": title,
                     "price": price_value,
-                    "url": url,
+                    "url": clean_url or raw_url or f"https://listado.mercadolibre.com.co/{item_id}",
                     "image_url": image_url,
                     "category": "mercadolibre_plp",
                     "timestamp": "Extraído por Ares Scraper"
@@ -109,26 +134,28 @@ class MercadoLibreAdapter(BaseAdapter):
     def _parse_pdp(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
         """Parser especializado para Fichas Individuales de Producto (PDP)."""
         try:
-            # Título principal del producto
             title_elem = soup.select_one('h1.ui-pdp-title')
             title = title_elem.get_text(strip=True) if title_elem else "Producto Individual Sin Título"
 
-            # Precio principal (fracción)
-            price_elem = soup.select_one('.andes-money-amount__fraction')
+            price_elem = (
+                soup.select_one('.ui-pdp-price__second-line .andes-money-amount__fraction')
+                or soup.select_one('.andes-money-amount__fraction')
+            )
             raw_price = price_elem.get_text(strip=True) if price_elem else "0"
             clean_price_str = re.sub(r'[^\d]', '', raw_price)
             price_value = float(clean_price_str) if clean_price_str else 0.0
 
-            # Imagen principal de la galería
             img_elem = soup.select_one('.ui-pdp-gallery__figure img, img.ui-pdp-image')
-            image_url = img_elem.get('src') or img_elem.get('data-zoom', '') if img_elem else ""
+            image_url = (img_elem.get('data-zoom') or img_elem.get('src', '')) if img_elem else ""
 
-            # URL de referencia (en PDP devolvemos la misma o vacía, pero estructurada)
+            canonical_elem = soup.select_one('link[rel="canonical"]')
+            pdp_url = canonical_elem.get('href', 'Ficha Individual PDP') if canonical_elem else "Ficha Individual PDP"
+
             return [{
                 "id": "MELI-PDP-001",
                 "title": title,
                 "price": price_value,
-                "url": "Ficha Individual PDP",
+                "url": pdp_url,
                 "image_url": image_url,
                 "category": "mercadolibre_pdp",
                 "timestamp": "Extraído por Ares Scraper"

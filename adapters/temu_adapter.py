@@ -26,6 +26,7 @@ class TemuAdapter(BaseAdapter):
     def parse_items(self, html: str) -> List[Dict[str, Any]]:
         soup = BeautifulSoup(html, 'html.parser')
         products = []
+        seen_ids = set()
         
         # Vector Estructural 1: Filtramos estrictamente por el anclaje de datos del contenedor
         cards = soup.select('div[data-tooltip^="goodContainer-"]')
@@ -36,31 +37,33 @@ class TemuAdapter(BaseAdapter):
                 title_elem = card.select_one('h2')
                 if not title_elem:
                     continue
-                # Se limpia la inyección de texto de accesibilidad de Temu
                 raw_title = title_elem.get_text(separator=" ", strip=True)
                 title = raw_title.replace("Abrir en una nueva pestaña.", "").strip()
 
-                # 2. Extracción de Enlace de Red
-                link_elem = card.select_one('a')
-                url = link_elem.get('href', '') if link_elem else ''
-                # Completar URL relativa
+                # 2. Generación de Clave Primaria (ID)
+                raw_tooltip = card.get('data-tooltip', '')
+                goods_id = raw_tooltip.replace('goodContainer-', '').strip() if raw_tooltip else f"PLP-{idx:03d}"
+                item_id = f"TEMU-{goods_id}"
+
+                if item_id in seen_ids:
+                    continue
+
+                # 3. Extracción de Enlace de Red (con respaldo canónico por goods_id para evitar URLs vacías)
+                link_elem = card.select_one('a[href]')
+                url = link_elem.get('href', '').strip() if link_elem else ''
                 if url.startswith('/'):
                     url = f"https://www.temu.com{url}"
-
-                # 3. Generación de Clave Primaria (ID)
-                raw_tooltip = card.get('data-tooltip', '')
-                item_id = raw_tooltip.replace('goodContainer-', 'TEMU-') if raw_tooltip else f"TEMU-PLP-{idx:03d}"
+                elif not url:
+                    url = f"https://www.temu.com/goods.html?goods_id={goods_id}"
 
                 # 4. Extracción de Precio (Vector Estructural data-type)
                 price_container = card.select_one('div[data-type="price"]')
                 if price_container:
-                    # Aislamos el primer span para evitar concatenar el texto oculto de accesibilidad
                     first_span = price_container.find('span')
                     raw_price = first_span.get_text(strip=True) if first_span else "0"
                 else:
                     raw_price = "0"
                     
-                # Limpieza matemática: eliminar moneda, puntos y comas
                 clean_price_str = re.sub(r'[^\d]', '', raw_price)
                 price_value = float(clean_price_str) if clean_price_str else 0.0
 
@@ -71,7 +74,8 @@ class TemuAdapter(BaseAdapter):
                 # Filtro de Seguridad Final
                 if not title or price_value == 0.0:
                     continue
-                    
+
+                seen_ids.add(item_id)
                 products.append({
                     "id": item_id,
                     "title": title,
@@ -82,8 +86,7 @@ class TemuAdapter(BaseAdapter):
                     "timestamp": "Extraído por Ares Scraper"
                 })
 
-            except Exception as e:
-                # Silenciar colisiones de nodos individuales para proteger el flujo del Data Lake
+            except Exception:
                 continue
                 
         return products
