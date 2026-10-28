@@ -1,0 +1,16 @@
+# Vercel Deployment Ignore
+# Ignorar scripts de Python de escritorio para que Vercel despliegue la suite como Frontend Estático
+main.py
+desktop_app.py
+scraper.py
+scraper_selenium.py
+analyzer.py
+build_web_server.py
+generate_clean_ares_web.py
+web_server.py
+requirements.txt
+chrome_profile/
+data_lake/
+adapters/
+.venv/
+__pycache__/
