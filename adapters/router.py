@@ -9,7 +9,9 @@ def get_adapter(url: str) -> BaseAdapter:
     parsed_url = urlparse(url)
     domain = parsed_url.netloc.lower()
 
-    if "mercadolibre" in domain or "mercadolivre" in domain:
+    # Ecosistema MercadoLibre: clasificados, vehículos, inmuebles y retail regional
+    meli_domains = ["mercadolibre", "mercadolivre", "tucarro", "tuinmueble", "tumoto"]
+    if any(m in domain for m in meli_domains):
         return MercadoLibreAdapter()
     elif "amazon" in domain:
         return AmazonAdapter()

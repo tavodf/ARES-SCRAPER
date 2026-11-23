@@ -9,10 +9,62 @@ ULTIMO_ERROR_STEALTH: str = ""
 
 def _detectar_version_chrome_local() -> Optional[int]:
     """
-    Detecta dinámicamente la versión principal (major version) de Google Chrome instalada
-    en Windows (ej. 152, 155, 156...) para evitar que las actualizaciones automáticas
-    de Chrome rompan el arranque de ChromeDriver (SessionNotCreatedException).
+    Detecta dinámicamente la versión principal (major version) del binario activo de Google Chrome
+    instalado en Windows mediante metadatos de chrome.exe y el registro de Windows,
+    evitando que carpetas de actualización pendientes generen SessionNotCreatedException.
     """
+    # 1. Inspeccionar metadatos reales del ejecutable chrome.exe via Win32 ctypes
+    rutas_exe = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+    ]
+    for exe_path in rutas_exe:
+        if os.path.isfile(exe_path):
+            try:
+                import ctypes
+                from ctypes import wintypes
+                size = ctypes.windll.version.GetFileVersionInfoSizeW(exe_path, None)
+                if size:
+                    res = ctypes.create_string_buffer(size)
+                    ctypes.windll.version.GetFileVersionInfoW(exe_path, None, size, res)
+                    lplpBuffer = wintypes.LPVOID()
+                    puLen = wintypes.UINT()
+                    if ctypes.windll.version.VerQueryValueW(res, r"\\", ctypes.byref(lplpBuffer), ctypes.byref(puLen)):
+                        class VS_FIXEDFILEINFO(ctypes.Structure):
+                            _fields_ = [
+                                ('dwSignature', wintypes.DWORD),
+                                ('dwStrucVersion', wintypes.DWORD),
+                                ('dwFileVersionMS', wintypes.DWORD),
+                                ('dwFileVersionLS', wintypes.DWORD),
+                                ('dwProductVersionMS', wintypes.DWORD),
+                                ('dwProductVersionLS', wintypes.DWORD),
+                            ]
+                        pffi = ctypes.cast(lplpBuffer, ctypes.POINTER(VS_FIXEDFILEINFO))
+                        major = pffi.contents.dwProductVersionMS >> 16
+                        if major > 0:
+                            return major
+            except Exception:
+                pass
+
+    # 2. Respaldo por Registro de Windows (versión activa reportada por Chrome)
+    try:
+        import winreg
+        for hive, subkey in [
+            (winreg.HKEY_CURRENT_USER, r"Software\Google\Chrome\BLBeacon"),
+            (winreg.HKEY_LOCAL_MACHINE, r"Software\Google\Chrome\BLBeacon")
+        ]:
+            try:
+                with winreg.OpenKey(hive, subkey) as key:
+                    val, _ = winreg.QueryValueEx(key, "version")
+                    if val:
+                        return int(val.split(".")[0])
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 3. Fallback: carpetas en disco (preferir versión menor activa si hay staging)
     rutas_chrome = [
         r"C:\Program Files\Google\Chrome\Application",
         r"C:\Program Files (x86)\Google\Chrome\Application",
@@ -27,27 +79,66 @@ def _detectar_version_chrome_local() -> Optional[int]:
                     if re.match(r"^\d+\.\d+\.\d+\.\d+$", d)
                 ]
                 if versiones:
-                    return max(versiones)
+                    return min(versiones)
             except Exception:
                 continue
     return None
 
 
-def _hidratar_pagina_actual(driver, url: str, tiempo_espera_max: int = 30, es_primera: bool = True) -> str:
+def _es_pantalla_de_barrera(driver) -> bool:
+    """Evalúa si la ventana activa se encuentra en un formulario de login, reto WAF o verificación."""
+    try:
+        curr_url = driver.current_url.lower()
+        barreras_url = [
+            "account-verification", "checkpoint", "/login", "identification",
+            "challenge_id", "security", "captcha"
+        ]
+        if any(b in curr_url for b in barreras_url):
+            return True
+
+        titulo = (driver.title or "").lower()
+        barreras_texto = [
+            "iniciar sesión", "iniciar sesion", "ingresa a tu cuenta", "verificación",
+            "verificacion", "captcha", "security", "robot", "login"
+        ]
+        if any(b in titulo for b in barreras_texto):
+            return True
+
+        # Chequeo en primeros 2500 caracteres del DOM para detectar formularios y retos
+        fuente_muestra = driver.page_source[:2500].lower()
+        if any(b in fuente_muestra for b in ["ingresa a tu cuenta", "no soy un robot", "g-recaptcha", "cf-turnstile"]):
+            return True
+
+        return False
+    except Exception:
+        return False
+
+
+def _hidratar_pagina_actual(driver, url: str, tiempo_espera_max: int = 60, es_primera: bool = True) -> str:
     driver.get(url)
     espera_base = 5 if es_primera else 3
     print(f"[STEALTH] Verificando estado de sesión y barreras WAF ({espera_base}s)...")
     time.sleep(espera_base)
 
     # --- INICIO DE SENSOR DE SESIÓN INTELIGENTE ---
-    titulo_pagina = driver.title.lower() if driver.title else ""
-    fuente_html = driver.page_source.lower()
+    es_barrera = _es_pantalla_de_barrera(driver)
 
-    barreras = ["iniciar sesión", "verificación", "captcha", "security", "robot", "login"]
+    if es_barrera:
+        print(f"\n[ALERTA OPERADOR] Barrera WAF / Verificación de identidad detectada ({driver.current_url}).")
+        print(f"[ALERTA OPERADOR] Por favor, ingrese a su cuenta o complete el captcha en la ventana de Chrome ({tiempo_espera_max}s)...")
+        # Monitoreo activo: esperar hasta que el operador realmente supere la pantalla de login/reto
+        t_inicio = time.time()
+        barrera_resuelta = False
+        while time.time() - t_inicio < tiempo_espera_max:
+            time.sleep(2)
+            if not _es_pantalla_de_barrera(driver):
+                print("[STEALTH] ¡Sesión verificada y barrera superada con éxito! Continuando extracción...")
+                barrera_resuelta = True
+                time.sleep(3)
+                break
 
-    if any(barrera in titulo_pagina for barrera in barreras) or "verify" in fuente_html:
-        print(f"[ALERTA OPERADOR] Barrera detectada. Intervenga manualmente AHORA ({tiempo_espera_max}s).")
-        time.sleep(tiempo_espera_max)
+        if not barrera_resuelta and _es_pantalla_de_barrera(driver):
+            print(f"[ALERTA OPERADOR] Tiempo límite ({tiempo_espera_max}s) alcanzado aún en pantalla de verificación.")
     else:
         print("[STEALTH] Sesión activa y verificada. Omitiendo espera prolongada.")
         time.sleep(1.5)
@@ -64,7 +155,7 @@ def _hidratar_pagina_actual(driver, url: str, tiempo_espera_max: int = 30, es_pr
     return driver.page_source
 
 
-def obtener_dom_dinamico(url: str, tiempo_espera_max: int = 30) -> str:
+def obtener_dom_dinamico(url: str, tiempo_espera_max: int = 60) -> str:
     """
     Motor de extracción sigilosa con Sensor de Sesión Inteligente.
     Reduce los tiempos de espera si la Cookie de Confianza está activa.
@@ -73,7 +164,7 @@ def obtener_dom_dinamico(url: str, tiempo_espera_max: int = 30) -> str:
     return res[0] if res else ""
 
 
-def obtener_multiples_doms_dinamicos(urls: List[str], tiempo_espera_max: int = 30) -> List[str]:
+def obtener_multiples_doms_dinamicos(urls: List[str], tiempo_espera_max: int = 60) -> List[str]:
     """
     Recorre una o múltiples URLs reutilizando la misma instancia de navegador y perfil persistente
     para evitar colisiones de bloqueo en chrome_profile y pérdida de datos entre páginas.
@@ -94,7 +185,7 @@ def obtener_multiples_doms_dinamicos(urls: List[str], tiempo_espera_max: int = 3
     options.add_argument("--window-size=1920,1080")
 
     # [INFRAESTRUCTURA] Creación de perfil persistente local para almacenar Cookies de Confianza
-    perfil_ruta = os.path.join(os.getcwd(), "chrome_profile")
+    perfil_ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chrome_profile")
     options.add_argument(f"--user-data-dir={perfil_ruta}")
 
     driver = None

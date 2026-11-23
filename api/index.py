@@ -11,6 +11,20 @@ from http.server import BaseHTTPRequestHandler
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INDEX_PATH = os.path.join(BASE_DIR, 'index.html')
 
+_CORS_ORIGIN_RE = re.compile(
+    r"^(https://([a-zA-Z0-9-]+\.)?(novuxops\.com|vercel\.app)|http://(localhost|127\.0\.0\.1)(:\d+)?)$"
+)
+
+
+def resolve_allowed_cors_origin(origin: str | None) -> str | None:
+    if not origin:
+        return None
+    origin = origin.strip()
+    extra = [o.strip() for o in os.getenv("NOVUX_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+    if origin in extra or _CORS_ORIGIN_RE.match(origin):
+        return origin
+    return None
+
 
 def is_safe_target_url(target_url: str) -> tuple[bool, str]:
     """
@@ -203,12 +217,35 @@ def scrape_real_url(target_url: str) -> list[dict]:
 
 
 class handler(BaseHTTPRequestHandler):
+    def _send_cors_headers(self):
+        allowed = resolve_allowed_cors_origin(self.headers.get('Origin'))
+        if allowed:
+            self.send_header('Access-Control-Allow-Origin', allowed)
+            self.send_header('Vary', 'Origin')
+            self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._send_cors_headers()
+        self.end_headers()
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html; charset=utf-8')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'SAMEORIGIN')
+        self.send_header('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload')
+        self._send_cors_headers()
+        self.end_headers()
+
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/html; charset=utf-8')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('X-Frame-Options', 'SAMEORIGIN')
         self.send_header('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload')
+        self._send_cors_headers()
         self.end_headers()
         try:
             with open(INDEX_PATH, 'r', encoding='utf-8') as f:
@@ -235,6 +272,7 @@ class handler(BaseHTTPRequestHandler):
             if not safe:
                 self.send_response(403)
                 self.send_header('Content-type', 'application/json')
+                self._send_cors_headers()
                 self.end_headers()
                 self.wfile.write(json.dumps({
                     "status": "error",
@@ -285,6 +323,7 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'application/json; charset=utf-8')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('X-Frame-Options', 'SAMEORIGIN')
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(response_data).encode('utf-8'))
 
