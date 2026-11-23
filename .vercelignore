@@ -5,8 +5,6 @@ desktop_app.py
 scraper.py
 scraper_selenium.py
 analyzer.py
-build_web_server.py
-generate_clean_ares_web.py
 web_server.py
 requirements.txt
 chrome_profile/
